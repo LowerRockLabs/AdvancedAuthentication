@@ -18,9 +18,14 @@ The package is designed with SaaS/Multi-Tenancy Implementations in mind
     * Voice
     * WhatsApp
   * Default or Enhanced Security Recovery Codes
+  * Customisable Expiry of SSO/Login
+  * Customisable Parameters to Require/Exclude MFA Requirements (e.g. do not require MFA on-premise)
 
 * IP/Country Login Lockdown Per-User / Role
 
 * Socialite (Customisable Verification and MFA options)
 
 * Enhanced Forensic Reports & Alerting
+
+
+All functionality & reporting is designed for ISO27001, UK & US Government Compliance
