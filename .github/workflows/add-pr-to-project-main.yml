@@ -7,11 +7,13 @@
 # To get a newer version, you will need to update the SHA.
 # You can also reference a tag or branch, but the action may change without warning.
 
-name: Add PR to project
+name: Add PR to project PR to Main
 on:
-  pull_request:
+  pull_request_target:
     types:
-      - ready_for_review
+      - opened
+    branches:
+      - 'main'
 jobs:
   track_pr:
     runs-on: ubuntu-latest
