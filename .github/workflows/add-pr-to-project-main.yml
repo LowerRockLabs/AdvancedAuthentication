@@ -28,8 +28,8 @@ jobs:
       - name: Get project data
         env:
           GITHUB_TOKEN: ${{ steps.generate_token.outputs.token }}
-          ORGANIZATION: LowerRockLabs
-          PROJECT_NUMBER: 6
+          ORGANIZATION: ${{ secrets.ORG_NAME }} 
+          PROJECT_NUMBER: ${{ secrets.PROJECT_NUMBER }} 
         run: |
           gh api graphql -f query='
             query($org: String!, $number: Int!) {
