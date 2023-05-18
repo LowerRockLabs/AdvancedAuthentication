@@ -1,0 +1,185 @@
+name: On Pull Requests
+
+on:
+  pull_request:
+    types: [opened, closed, reopened]
+
+env:
+    GH_TOKEN: ${{ steps.generate_token.outputs.token }} ## YOUR_TOKEN is a personal access token set as an action secret for your repository
+    ORGANIZATION: ${{ secrets.ORG_NAME }}  ## Your organization name
+    PROJECT_NUMBER: ${{ secrets.PROJECT_NUMBER }}  ## Your project (beta) number. You can find it in the project's URL.
+    REPO: AdvancedAuthentication ## The name of the repository your issues, branches and project are on
+    
+jobs:
+  Check-Branch-Name:
+    runs-on: ubuntu-latest
+    outputs:
+      issue_num: ${{ steps.step1.outputs.issue_num }}
+      tracked: ${{ steps.step1.outputs.tracked }}
+    steps:
+      - name: Generate token
+        id: generate_token
+        uses: tibdex/github-app-token@b62528385c34dbc9f38e5f4225ac829252d1ea92
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PEM }}
+
+      - name: Get project data
+        env:
+          GITHUB_TOKEN: ${{ steps.generate_token.outputs.token }}
+          ORGANIZATION: ${{ secrets.ORG_NAME }}  ## Your organization name
+          PROJECT_NUMBER: ${{ secrets.PROJECT_NUMBER }}  ## Your project (beta) number. You can find it in the project's URL.
+          REPO: AdvancedAuthentication ## The name of the repository your issues, branches and project are on
+
+      - name: Get Created Issue Number
+        id: step1
+        run: |
+          branch_name=`echo '${{ github.event.pull_request.head.ref }}'`
+          issue_num=`echo ${branch_name#*#} | egrep -o '^[^/]+'`
+          re='^[0-9]+$'
+          if ! [[ $issue_num =~ $re ]] ; then
+            echo "::set-output name=tracked::false"
+          else
+            echo "::set-output name=tracked::true"
+          fi
+          echo "::set-output name=issue_num::$issue_num"
+          
+  Branch-Is-Not-Tracked:
+    needs: Check-Branch-Name
+    if: needs.Check-Branch-Name.outputs.tracked == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Branch Is not Tracked
+        run: |
+          echo "No issue number detected. Branch ${{ github.event.pull_request.head.ref }} will not be tracked in projects.";
+
+  Move-Issue-In-Project:
+    runs-on: ubuntu-latest
+    needs: Check-Branch-Name
+    if: needs.Check-Branch-Name.outputs.tracked == 'true'
+    env: 
+      ISSUE_NUM: ${{ needs.Check-Branch-Name.outputs.issue_num}}
+    steps:     
+      - name: Get Issue Number
+        run: |
+          action=`echo '${{github.event.action}}'`
+          merged=`echo '${{github.event.pull_request.merged}}'` 
+          echo "PR_ACTION=$action" >> $GITHUB_ENV
+          echo "MERGED=$merged" >> $GITHUB_ENV   
+      
+      - name: Get all Branches for Issue
+        id: branches
+        run: |
+          gh api graphql -f query='query FindBranches{
+            repository(owner:"${{ env.ORGANIZATION }}", name:"${{ env.REPO }}") {
+              refs(refPrefix: "refs/heads/#${{env.ISSUE_NUM}}/"  first: 100){
+                totalCount
+                nodes {
+                  associatedPullRequests(states: [OPEN],first:100) {
+                    totalCount
+                  }
+                }
+              }
+            }
+          }' > project_data.json
+            echo 'NUM_OF_BRANCHES='$(jq '.data.repository.refs.totalCount' project_data.json) >> $GITHUB_ENV
+            echo 'NUM_OF_PRS='$(jq '[.data.repository.refs.nodes | .[].associatedPullRequests.totalCount] | add' project_data.json) >> $GITHUB_ENV
+      
+
+      - name: Set Env Variables For New/Reopened PR
+        if: ${{env.PR_ACTION == 'opened' || env.PR_ACTION == 'reopened' || env.PR_ACTION == 'edited'}}
+        run: |
+          echo "ISSUE_PROJECT_STATUS="In Review"" >> $GITHUB_ENV  
+          
+      - name: Set Env Variables For Closed PR
+        if: ${{ (env.PR_ACTION == 'closed') && ( env.NUM_OF_PRS >= 1) }}
+        run: |
+          echo "ISSUE_PROJECT_STATUS="In Review"" >> $GITHUB_ENV    
+    
+      - name: Set Env Variables For Closed PR No More PRS
+        if: ${{ (env.MERGED== 'false') && (env.PR_ACTION == 'closed') && ( env.NUM_OF_PRS < 1) }}
+        run: |
+          echo "ISSUE_PROJECT_STATUS="In Progress"" >> $GITHUB_ENV    
+
+      - name: Set Env Variables For Closed and Merged PR
+        if: ${{(env.MERGED == 'true') && (env.PR_ACTION == 'closed') && ( env.NUM_OF_BRANCHES == 0)}}
+        run: |
+          echo "ISSUE_PROJECT_STATUS="Done"" >> $GITHUB_ENV    
+          
+      - name: Get Issue Project Item ID 
+        run: |
+          gh api graphql -f query='query FindIssueID {
+            repository(owner:"${{ env.ORGANIZATION }}", name:"${{ env.REPO }}") {
+                issue(number:${{ env.ISSUE_NUM }}) {
+                      id,
+                      projectItems(first: 1){
+                        nodes{ 
+                          id
+                          }
+                        },
+                      }
+                    }
+                  }' > project_data.json
+                  echo 'ISSUE_ID='$(jq '.data.repository.issue.id' project_data.json) >> $GITHUB_ENV
+                  string=$(jq '.data.repository.issue.projectItems.nodes[0].id' project_data.json)
+                  string=`echo "$string" | tr -d '"'`
+                  echo 'ISSUE_PROJECT_ID='$string >> $GITHUB_ENV
+              
+       
+      - name: Get Project Status Item ID
+        run: |
+          gh api graphql -f query='query{
+          organization(login: "${{ env.ORGANIZATION }}"){
+              projectV2(number: ${{ env.PROJECT_NUMBER }}) {
+                  id
+                  fields(first:20) {
+                    nodes {
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        name
+                        options {
+                          id
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }' > project_data.json
+          echo 'PROJECT_ID='$(jq '.data.organization.projectV2.id' project_data.json) >> $GITHUB_ENV
+          echo 'STATUS_FIELD_ID='$(jq '.data.organization.projectV2.fields.nodes[] | select(.name== "Status") | .id' project_data.json) >> $GITHUB_ENV
+          echo 'NEW_STATUS_ID='$(jq '.data.organization.projectV2.fields.nodes[] | select(.name== "Status") | .options[] | select(.name=="${{env.ISSUE_PROJECT_STATUS}}" ) |.id' project_data.json) >> $GITHUB_ENV
+          
+      - name: Move Issue Number ${{ env.ISSUE_NUM }} Into ${{ env.ISSUE_PROJECT_STATUS }}
+        run: |
+          gh api graphql -f query='
+            mutation {
+              updateProjectV2ItemFieldValue(
+                input: {
+                      projectId: ${{ env.PROJECT_ID }}
+                      itemId: "${{ env.ISSUE_PROJECT_ID }}"
+                      fieldId: ${{ env.STATUS_FIELD_ID }}
+                      value: { 
+                          singleSelectOptionId: ${{ env.NEW_STATUS_ID }}
+                      }
+                }
+                ) {
+                projectV2Item {
+                  id
+                }
+              }
+            }'
+            
+      - name: Close Issue
+        if: ${{(env.NUM_OF_BRANCHES == 0) && (env.MERGED == 'true') && (env.PR_ACTION == 'closed')}}
+        run: |
+         gh api graphql -f query='
+            mutation {
+              updateIssue(input: {id : ${{ env.ISSUE_ID }} , state: CLOSED}){
+                issue {
+                      id
+                     title
+                    }
+                  }
+                }'
